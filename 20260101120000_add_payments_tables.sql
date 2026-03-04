@@ -39,16 +39,6 @@ CREATE TABLE public.subscriptions (
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP
 );
 
--- Payment events: idempotency log for webhook processing
-CREATE TABLE public.payment_events (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    provider text NOT NULL,
-    event_type text NOT NULL,
-    event_id text NOT NULL,
-    user_id uuid,
-    payload jsonb NOT NULL DEFAULT '{}',
-    processed_at timestamptz DEFAULT CURRENT_TIMESTAMP
-);
 
 -- ============================================================================
 -- PRIMARY KEYS
@@ -79,13 +69,6 @@ ALTER TABLE public.subscriptions
     FOREIGN KEY (product_id)
     REFERENCES public.products(id);
 
-CREATE UNIQUE INDEX payment_events_pkey ON public.payment_events USING btree (id);
-ALTER TABLE public.payment_events ADD CONSTRAINT payment_events_pkey PRIMARY KEY USING INDEX payment_events_pkey;
-
-CREATE UNIQUE INDEX payment_events_event_id_key ON public.payment_events USING btree (event_id);
-ALTER TABLE public.payment_events
-    ADD CONSTRAINT payment_events_event_id_key
-    UNIQUE USING INDEX payment_events_event_id_key;
 
 -- ============================================================================
 -- ROW LEVEL SECURITY
@@ -93,7 +76,6 @@ ALTER TABLE public.payment_events
 
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payment_events ENABLE ROW LEVEL SECURITY;
 
 -- Products: authenticated users can read active products
 CREATE POLICY "Authenticated users can view active products"
@@ -111,7 +93,6 @@ CREATE POLICY "Users can view their own subscriptions"
     TO authenticated
     USING (auth.uid() = user_id);
 
--- Payment events: no user access (service role only)
 
 -- ============================================================================
 -- TRIGGERS

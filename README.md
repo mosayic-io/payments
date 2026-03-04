@@ -11,32 +11,37 @@ Data flows **into** Supabase via webhooks from each provider. Data flows **out**
 ## Directory Structure
 
 ```
-app/payments/
+payments/
     __init__.py              # Mounts both routers under /payments
     schemas.py               # Pydantic models and enums (shared across all files)
     exceptions.py            # PaymentError, WebhookVerificationError
     clients/
+        __init__.py
         stripe_client.py     # Thin wrapper around the Stripe SDK
     routes/
+        __init__.py
         payments_router.py   # User-facing endpoints (products, checkout, subscription)
         webhooks_router.py   # Webhook endpoints (Stripe, RevenueCat)
     services/
+        __init__.py
         payments_service.py  # Business logic for user-facing operations
         webhook_service.py   # Business logic for processing webhook events
     tests/
+        __init__.py
         conftest.py          # Shared fixtures (mock_db_client, payments_client)
         test_payments_service.py
         test_webhook_service.py
         test_webhooks_router.py
+20260101120000_add_payments_tables.sql  # Supabase migration for payments tables
 ```
 
 ## Database
 
-Tables are defined in Supabase migrations at `supabase/migrations/` (relative to the project root). The payments module depends on three tables:
+Tables are defined in the Supabase migration file `20260101120000_add_payments_tables.sql` at the project root. The payments module depends on two tables:
 
 - **products** — catalog of purchasable plans. Each row has an `identifier` (e.g. `"pro_monthly"`), pricing info, an `entitlement` string, and optional provider-specific IDs (`stripe_product_id`, `stripe_price_id`, `revenuecat_product_id`).
 - **subscriptions** — one row per user per provider. Stores `status`, `entitlement`, `provider_subscription_id`, `provider_customer_id`, `current_period_end`, and `cancel_at_period_end`. Upserted on conflict of `(user_id, provider)`.
-- **payment_events** — append-only log of every webhook event. Used for idempotency (duplicate `event_id` values are skipped) and debugging.
+
 
 ## Endpoints
 
@@ -113,7 +118,7 @@ All endpoints are mounted under `/payments`. User-facing endpoints require authe
 
 ## Environment Variables
 
-Configured in `app/core/settings.py`, loaded from `.env`:
+Loaded from `.env`:
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
@@ -128,7 +133,7 @@ Both providers are optional. If `STRIPE_SECRET_KEY` is empty, the Stripe client 
 ## Testing
 
 ```bash
-uv run pytest app/payments/tests/ -v
+uv run pytest payments/tests/ -v
 ```
 
 Tests use `unittest.mock` to mock the Supabase client and Stripe client. The mock Supabase client is configured in `tests/conftest.py` to support the chained query builder pattern (`.table().select().eq().execute()`).

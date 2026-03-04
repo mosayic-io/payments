@@ -14,7 +14,7 @@ class WebhookService:
     """Handles webhook events from Stripe and RevenueCat.
 
     Both providers converge on shared internal methods that write to the same
-    Supabase tables. The payment_events table provides idempotency.
+    Supabase tables.
     """
 
     def __init__(self, db_client, stripe_client: StripeClient | None):
@@ -35,12 +35,8 @@ class WebhookService:
             payload, signature, self.settings.stripe_webhook_secret
         )
 
-        event_id = event["id"]
         event_type = event["type"]
         data = event["data"]["object"]
-
-        if await self._is_duplicate_event(event_id):
-            return {"status": "already_processed"}
 
         handler_map = {
             "checkout.session.completed": self._handle_stripe_checkout_completed,
@@ -52,14 +48,6 @@ class WebhookService:
         handler = handler_map.get(event_type)
         if handler:
             await handler(data)
-
-        await self._log_event(
-            provider=PaymentProvider.STRIPE,
-            event_type=event_type,
-            event_id=event_id,
-            user_id=data.get("metadata", {}).get("user_id"),
-            payload=data,
-        )
 
         return {"status": "ok"}
 
@@ -143,10 +131,6 @@ class WebhookService:
         """Process a RevenueCat webhook event."""
         event = payload.get("event", {})
         event_type = event.get("type", "")
-        event_id = event.get("id", "")
-
-        if await self._is_duplicate_event(event_id):
-            return {"status": "already_processed"}
 
         app_user_id = event.get("app_user_id", "")
         product_id_rc = event.get("product_id", "")
@@ -167,14 +151,6 @@ class WebhookService:
                 product_id_rc=product_id_rc,
                 event=event,
             )
-
-        await self._log_event(
-            provider=PaymentProvider.REVENUECAT,
-            event_type=event_type,
-            event_id=event_id,
-            user_id=app_user_id or None,
-            payload=event,
-        )
 
         return {"status": "ok"}
 
@@ -357,39 +333,6 @@ class WebhookService:
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
-
-    async def _is_duplicate_event(self, event_id: str) -> bool:
-        if not event_id:
-            return False
-        try:
-            response = await (
-                self.db.table("payment_events")
-                .select("id")
-                .eq("event_id", event_id)
-                .execute()
-            )
-            return len(response.data) > 0
-        except Exception:
-            return False
-
-    async def _log_event(
-        self,
-        provider: str,
-        event_type: str,
-        event_id: str,
-        user_id: str | None,
-        payload: dict,
-    ) -> None:
-        try:
-            await self.db.table("payment_events").insert({
-                "provider": provider,
-                "event_type": event_type,
-                "event_id": event_id,
-                "user_id": user_id,
-                "payload": payload,
-            }).execute()
-        except Exception as e:
-            logger.warning("Failed to log payment event %s: %s", event_id, e)
 
     async def _get_product_by_identifier(self, identifier: str) -> dict | None:
         try:
