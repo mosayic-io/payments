@@ -382,25 +382,36 @@ class WebhookService:
             return None
 
     async def _resolve_rc_package_id(self, store_product_id: str) -> str | None:
-        """Query RevenueCat packages to find which one contains *store_product_id*."""
+        """Query RevenueCat offerings to find which package contains *store_product_id*.
+
+        Uses ``expand=items.package.product`` to fetch offerings → packages →
+        products in a single API call.  Each product's ``store_identifier`` is
+        compared to *store_product_id*; on match the parent package's
+        ``lookup_key`` is returned.
+        """
         settings = self.settings
         if not settings.revenuecat_api_key or not settings.revenuecat_project_id:
             return None
         url = (
             f"https://api.revenuecat.com/v2/projects"
-            f"/{settings.revenuecat_project_id}/packages"
+            f"/{settings.revenuecat_project_id}/offerings"
         )
+        headers = {"Authorization": f"Bearer {settings.revenuecat_api_key}"}
+        params = {"expand": "items.package.product"}
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    url,
-                    headers={"Authorization": f"Bearer {settings.revenuecat_api_key}"},
-                    timeout=10,
+                    url, headers=headers, params=params, timeout=10,
                 )
                 resp.raise_for_status()
-                for pkg in resp.json().get("items", []):
-                    if store_product_id in pkg.get("product_identifiers", []):
-                        return pkg.get("identifier")
+                for offering in resp.json().get("items", []):
+                    packages = offering.get("packages", {})
+                    for pkg in packages.get("items", []):
+                        products = pkg.get("products", {})
+                        for assoc in products.get("items", []):
+                            product = assoc.get("product", {})
+                            if product.get("store_identifier") == store_product_id:
+                                return pkg.get("lookup_key")
         except Exception:
             logger.exception(
                 "Failed to resolve RC store product '%s' to a package",
