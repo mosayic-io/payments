@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import HTTPException, status
 
 from app.core.settings import get_settings
@@ -348,17 +349,64 @@ class WebhookService:
             return None
 
     async def _get_product_by_rc_id(self, revenuecat_product_id: str) -> dict | None:
+        """Look up a product by RevenueCat identifier.
+
+        The DB ``revenuecat_product_id`` column may store a package identifier
+        while webhooks send the platform store product ID.  When a direct match
+        fails we ask the RevenueCat API which package owns the product ID and
+        retry with the package identifier.
+        """
+        # Direct lookup — works when DB value matches the webhook value.
+        product = await self._query_product_by_rc_id(revenuecat_product_id)
+        if product:
+            return product
+
+        # Fallback — resolve store product ID → package identifier via RC API.
+        package_id = await self._resolve_rc_package_id(revenuecat_product_id)
+        if package_id and package_id != revenuecat_product_id:
+            return await self._query_product_by_rc_id(package_id)
+
+        return None
+
+    async def _query_product_by_rc_id(self, rc_id: str) -> dict | None:
         try:
             response = await (
                 self.db.table("products")
                 .select("*")
-                .eq("revenuecat_product_id", revenuecat_product_id)
+                .eq("revenuecat_product_id", rc_id)
                 .single()
                 .execute()
             )
             return response.data
         except Exception:
             return None
+
+    async def _resolve_rc_package_id(self, store_product_id: str) -> str | None:
+        """Query RevenueCat packages to find which one contains *store_product_id*."""
+        settings = self.settings
+        if not settings.revenuecat_api_key or not settings.revenuecat_project_id:
+            return None
+        url = (
+            f"https://api.revenuecat.com/v2/projects"
+            f"/{settings.revenuecat_project_id}/packages"
+        )
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {settings.revenuecat_api_key}"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                for pkg in resp.json().get("items", []):
+                    if store_product_id in pkg.get("product_identifiers", []):
+                        return pkg.get("identifier")
+        except Exception:
+            logger.exception(
+                "Failed to resolve RC store product '%s' to a package",
+                store_product_id,
+            )
+        return None
 
     @staticmethod
     def _map_stripe_status(stripe_status: str) -> str:
